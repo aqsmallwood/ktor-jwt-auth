@@ -8,6 +8,9 @@ import io.ktor.http.*
 import io.ktor.auth.*
 import io.ktor.gson.*
 import io.ktor.features.*
+import net.bytebros.auth.AuthToken
+import net.bytebros.auth.NewUser
+import net.bytebros.auth.Profile
 
 fun main(args: Array<String>): Unit = io.ktor.server.netty.EngineMain.main(args)
 
@@ -23,12 +26,19 @@ fun Application.module(testing: Boolean = false) {
     }
 
     routing {
-        get("/") {
-            call.respondText("HELLO WORLD!", contentType = ContentType.Text.Plain)
-        }
-
-        get("/json/gson") {
-            call.respond(mapOf("hello" to "world"))
+        route("auth") {
+            get("profile") {
+                val profile = Profile(1, "coolguy", "admin@test.com")
+                call.respond(profile)
+            }
+            post("register") {
+                val newUser = NewUser("coolguy", "admin@test.com", "P@ssword", "P@ssword")
+                call.respond(HttpStatusCode.Created, "You registered a profile for coolguy")
+            }
+            post("token") {
+                val token = AuthToken("auth_token")
+                call.respond(token)
+            }
         }
     }
 }
