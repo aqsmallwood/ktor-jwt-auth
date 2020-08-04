@@ -11,6 +11,7 @@ import io.ktor.features.*
 import net.bytebros.auth.AuthToken
 import net.bytebros.auth.NewUser
 import net.bytebros.auth.Profile
+import net.bytebros.auth.UserService
 
 fun main(args: Array<String>): Unit = io.ktor.server.netty.EngineMain.main(args)
 
@@ -25,6 +26,8 @@ fun Application.module(testing: Boolean = false) {
         }
     }
 
+    val userService = UserService()
+
     routing {
         route("auth") {
             get("profile") {
@@ -32,8 +35,13 @@ fun Application.module(testing: Boolean = false) {
                 call.respond(profile)
             }
             post("register") {
-                val newUser = NewUser("coolguy", "admin@test.com", "P@ssword", "P@ssword")
-                call.respond(HttpStatusCode.Created, "You registered a profile for coolguy")
+                val newUser = call.receive<NewUser>()
+                val registrationErrors = userService.registerNewUser(newUser)
+                if (registrationErrors.isNotEmpty()) {
+                    call.respond(HttpStatusCode.BadRequest, registrationErrors)
+                    return@post
+                }
+                call.respond(HttpStatusCode.Created, "You registered a profile for ${newUser.username}")
             }
             post("token") {
                 val token = AuthToken("auth_token")
