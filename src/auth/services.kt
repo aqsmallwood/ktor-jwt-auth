@@ -1,16 +1,15 @@
 package net.bytebros.auth
 
+import com.auth0.jwt.JWT
+import com.auth0.jwt.algorithms.Algorithm
 import org.mindrot.jbcrypt.BCrypt
 import java.lang.StringBuilder
+import java.util.*
 
 class UserService {
 
     private val users: MutableList<User> = mutableListOf()
     private var userIdIndex: Int = 1
-
-    private fun findUserById(id: Int): User? {
-        return users.firstOrNull { it.id == id }
-    }
 
     private fun findUserByEmail(email: String): User? {
         return users.firstOrNull { it.email.toLowerCase() == email.toLowerCase() }
@@ -20,12 +19,19 @@ class UserService {
         return users.firstOrNull { it.username.toLowerCase() == username.toLowerCase() }
     }
 
-    fun getProfileForUserId(userId: Int) {
-        // look user up by id, return null if user not found
-        // return user profile
+    private fun insertNewUser(newUser: NewUser) {
+        users.add(User(userIdIndex++, newUser.username, newUser.email, BCrypt.hashpw(newUser.password, BCrypt.gensalt())))
     }
 
-    fun registerNewUser(newUser: NewUser): Map<String, String> {
+    fun findUserById(id: Int): User? {
+        return users.firstOrNull { it.id == id }
+    }
+
+    fun getProfileForUserId(userId: Int): Profile? {
+        return findUserById(userId)?.toProfile()
+    }
+
+    fun registerNewUser(newUser: NewUser) {
         val errors = mutableMapOf<String, String>()
 
         newUser.apply {
@@ -44,16 +50,21 @@ class UserService {
             if (findUserByUsername(username) != null)
                 errors["username"] = "Email already exists"
 
-            users.add(User(userIdIndex++, username, email, BCrypt.hashpw(password, BCrypt.gensalt())))
+            if (errors.isNotEmpty()) throw RegistrationException("Invalid user registration", errors)
         }
 
-        return errors
+        insertNewUser(newUser)
     }
 
-    fun authenticateUserCredentials(userCredentials: UserCredentials) {
-        // look up user by username, return null if username not found
-        // test password against the user, return null if invalid
-        // return token for user
+    fun authenticateUserCredentials(userCredentials: UserCredentials): AuthToken {
+        val foundUser = findUserByEmail(userCredentials.email) ?: throw AuthenticationException("Invalid credentials")
+        if (!BCrypt.checkpw(userCredentials.password, foundUser.password)) throw AuthenticationException("Invalid credentials")
+        val token: String = JWT.create()
+            .withSubject(foundUser.id.toString())
+            .withIssuer("ktor-auth")
+            .withExpiresAt(Date(System.currentTimeMillis() + 300_000))
+            .sign(Algorithm.HMAC256("oursecret"))
+        return AuthToken(token)
     }
 }
 
