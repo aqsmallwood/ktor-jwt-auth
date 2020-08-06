@@ -1,7 +1,5 @@
 package net.bytebros
 
-import com.auth0.jwt.JWT
-import com.auth0.jwt.algorithms.Algorithm
 import io.ktor.application.*
 import io.ktor.response.*
 import io.ktor.request.*
@@ -12,24 +10,31 @@ import io.ktor.auth.jwt.jwt
 import io.ktor.gson.*
 import io.ktor.features.*
 import net.bytebros.auth.*
+import org.jetbrains.exposed.sql.Database
+import org.jetbrains.exposed.sql.SchemaUtils
+import org.jetbrains.exposed.sql.StdOutSqlLogger
+import org.jetbrains.exposed.sql.addLogger
+import org.jetbrains.exposed.sql.transactions.transaction
 
 fun main(args: Array<String>): Unit = io.ktor.server.netty.EngineMain.main(args)
 
 @Suppress("unused") // Referenced in application.conf
 @kotlin.jvm.JvmOverloads
 fun Application.module(testing: Boolean = false) {
-    val userService = UserService()
+    val jwtSecret = environment.config.property("jwt.secret").getString()
+    val jwtIssuer = environment.config.property("jwt.issuer").getString()
+
+    val jwtService = JwtService(jwtSecret, jwtIssuer)
+    val userService = UserService(jwtService)
 
     install(Authentication) {
         jwt {
             verifier(
-                JWT
-                    .require(Algorithm.HMAC256("oursecret"))
-                    .withIssuer("ktor-auth").build()
+                jwtService.verifier
             )
-            realm = "ktor-auth"
+            realm = jwtService.issuer
             validate { jwt ->
-                val userId = jwt.payload.getClaim("sub")?.asString()?.toInt() ?: return@validate null
+                val userId = jwtService.getUserId(jwt) ?: return@validate null
                 userService.findUserById(userId)
             }
         }
@@ -78,6 +83,28 @@ fun Application.module(testing: Boolean = false) {
                 call.respond(token)
             }
         }
+    }
+}
+
+private fun Application.database() {
+    val dbProperties = environment.config.config("database")
+    val dbHost = dbProperties.property("host").getString()
+    val dbPort = dbProperties.property("port").getString()
+    val dbName = dbProperties.property("name").getString()
+    val dbUser = dbProperties.property("user").getString()
+    val dbPassword = dbProperties.property("password").getString()
+
+    val dbUrl = "jdbc:postgresql://$dbHost:$dbPort/$dbName"
+    Database.connect(
+        url = dbUrl,
+        driver = "org.postgresql.Driver",
+        user = dbUser,
+        password = dbPassword
+    )
+
+    transaction {
+        addLogger(StdOutSqlLogger)
+        SchemaUtils.create(UsersTable)
     }
 }
 

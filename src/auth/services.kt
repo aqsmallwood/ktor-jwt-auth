@@ -1,30 +1,37 @@
 package net.bytebros.auth
 
 import com.auth0.jwt.JWT
+import com.auth0.jwt.JWTVerifier
 import com.auth0.jwt.algorithms.Algorithm
+import io.ktor.auth.jwt.JWTCredential
+import org.jetbrains.exposed.sql.LowerCase
+import org.jetbrains.exposed.sql.SqlExpressionBuilder.eq
+import org.jetbrains.exposed.sql.insert
+import org.jetbrains.exposed.sql.select
+import org.jetbrains.exposed.sql.transactions.transaction
 import org.mindrot.jbcrypt.BCrypt
-import java.lang.StringBuilder
 import java.util.*
 
-class UserService {
-
-    private val users: MutableList<User> = mutableListOf()
-    private var userIdIndex: Int = 1
-
-    private fun findUserByEmail(email: String): User? {
-        return users.firstOrNull { it.email.toLowerCase() == email.toLowerCase() }
-    }
-
-    private fun findUserByUsername(username: String): User? {
-        return users.firstOrNull { it.username.toLowerCase() == username.toLowerCase() }
-    }
+class UserService(private val jwtService: JwtService) {
 
     private fun insertNewUser(newUser: NewUser) {
-        users.add(User(userIdIndex++, newUser.username, newUser.email, BCrypt.hashpw(newUser.password, BCrypt.gensalt())))
+        UsersTable.insert { row ->
+            row[username] = newUser.username
+            row[email] = newUser.email
+            row[password] = BCrypt.hashpw(newUser.password, BCrypt.gensalt())
+        }
     }
 
-    fun findUserById(id: Int): User? {
-        return users.firstOrNull { it.id == id }
+    private fun findUserByEmail(email: String): User? = transaction {
+        UsersTable.select(LowerCase(UsersTable.email) eq email.toLowerCase()).firstOrNull()?.toUser()
+    }
+
+    private fun findUserByUsername(username: String): User? = transaction {
+        UsersTable.select(LowerCase(UsersTable.username) eq username.toLowerCase()).firstOrNull()?.toUser()
+    }
+
+    fun findUserById(id: Int): User? = transaction {
+        UsersTable.select(UsersTable.id eq id).firstOrNull()?.toUser()
     }
 
     fun getProfileForUserId(userId: Int): Profile? {
@@ -59,24 +66,30 @@ class UserService {
     fun authenticateUserCredentials(userCredentials: UserCredentials): AuthToken {
         val foundUser = findUserByEmail(userCredentials.email) ?: throw AuthenticationException("Invalid credentials")
         if (!BCrypt.checkpw(userCredentials.password, foundUser.password)) throw AuthenticationException("Invalid credentials")
-        val token: String = JWT.create()
-            .withSubject(foundUser.id.toString())
-            .withIssuer("ktor-auth")
-            .withExpiresAt(Date(System.currentTimeMillis() + 300_000))
-            .sign(Algorithm.HMAC256("oursecret"))
-        return AuthToken(token)
+        return jwtService.makeToken(foundUser)
     }
 }
 
-val passwordRegex = "^(?=.*[0-9])(?=.*[a-z])(?=.*[A-Z])(?=.*[@#${'$'}%!\\-_?&]).{8,}".toRegex()
-val emailRegex = StringBuilder().apply {
-    append("^(([\\w-]+\\.)+[\\w-]+|([a-zA-Z]|[\\w-]{2,}))@")
-    append("((([0-1]?[0-9]{1,2}|25[0-5]|2[0-4][0-9])\\.([0-1]?")
-    append("[0-9]{1,2}|25[0-5]|2[0-4][0-9])\\.")
-    append("([0-1]?[0-9]{1,2}|25[0-5]|2[0-4][0-9])\\.([0-1]?")
-    append("[0-9]{1,2}|25[0-5]|2[0-4][0-9]))|")
-    append("([a-zA-Z]+[\\w-]+\\.)+[a-zA-Z]{2,4})${'$'}")
-}.toString().toRegex()
+class JwtService(private val secret: String, val issuer: String) {
+    private val algorithm = Algorithm.HMAC256(secret)
+    private val validityInMs = 300_000
 
-fun String.isValidPassword() = passwordRegex.matches(this)
-fun String.isValidEmail() = emailRegex.matches(this)
+    val verifier: JWTVerifier = JWT
+        .require(algorithm)
+        .withIssuer(issuer)
+        .build()
+
+    fun makeToken(user: User): AuthToken = AuthToken(
+        JWT.create()
+            .withSubject(user.id.toString())
+            .withIssuer(issuer)
+            .withExpiresAt(getExpiration())
+            .sign(algorithm)
+    )
+
+    fun getUserId(jwt: JWTCredential): Int? {
+        return jwt.payload.getClaim("sub")?.asString()?.toInt()
+    }
+
+    private fun getExpiration() = Date(System.currentTimeMillis() + validityInMs)
+}
